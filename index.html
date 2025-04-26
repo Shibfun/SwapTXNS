@@ -116,6 +116,7 @@
                 chainMismatch: "Error: Not connected to Shibarium network (chain ID should be 109).",
                 rpcError: "Error: Failed to connect to RPC: ",
                 noPrivateKeys: "Error: No private keys provided.",
+                invalidPrivateKey: "Error: Invalid private key: ",
                 invalidTokenAddress: "Error: Invalid token address.",
                 invalidAmountRange: "Error: Max BONE amount must be greater than Min BONE amount.",
                 invalidGasPrice: "Error: Invalid Gas Price.",
@@ -132,7 +133,8 @@
                 errorProcessing: "Error processing ",
                 errorMessage: ": ",
                 allProcessed: "All wallets processed. Done!",
-                generalError: "Error: "
+                generalError: "Error: ",
+                suggestedGasPrice: "Suggested Gas Price: "
             },
             zh: {
                 title: "Swap 交易管理",
@@ -161,6 +163,7 @@
                 chainMismatch: "错误: 未连接到 Shibarium 网络 (链 ID 应为 109)。",
                 rpcError: "错误: 无法连接到 RPC: ",
                 noPrivateKeys: "错误: 未提供私钥。",
+                invalidPrivateKey: "错误: 无效的私钥: ",
                 invalidTokenAddress: "错误: 无效的代币地址。",
                 invalidAmountRange: "错误: 最大 BONE 数量必须大于最小 BONE 数量。",
                 invalidGasPrice: "错误: 无效的 Gas 价格。",
@@ -177,7 +180,8 @@
                 errorProcessing: "处理时出错 ",
                 errorMessage: ": ",
                 allProcessed: "所有钱包处理完成。完成!",
-                generalError: "错误: "
+                generalError: "错误: ",
+                suggestedGasPrice: "建议 Gas 价格: "
             }
         };
 
@@ -188,22 +192,22 @@
 
         function updateLanguage() {
             const lang = document.getElementById("language").value;
-            document.getElementBy actsById("title").textContent = getMessage("title");
-            document.getElementById("labelRpcUrl").childNodes[0].textContent = getMessage("labelRpcUrl");
-            document.getElementById("labelChainId").childNodes[0].textContent = getMessage("labelChainId");
-            document.getElementById("labelNetworkName").childNodes[0].textContent = getMessage("labelNetworkName");
-            document.getElementById("labelCurrencySymbol").childNodes[0].textContent = getMessage("labelCurrencySymbol");
-            document.getElementById("labelBlockExplorer").childNodes[0].textContent = getMessage("labelBlockExplorer");
-            document.getElementById("labelSwap").childNodes[0].textContent = getMessage("labelSwap");
-            document.getElementById("labelLanguage").childNodes[0].textContent = getMessage("labelLanguage");
+            document.getElementById("title").textContent = getMessage("title");
+            document.getElementById("labelRpcUrl").firstChild.nodeValue = getMessage("labelRpcUrl");
+            document.getElementById("labelChainId").firstChild.nodeValue = getMessage("labelChainId");
+            document.getElementById("labelNetworkName").firstChild.nodeValue = getMessage("labelNetworkName");
+            document.getElementById("labelCurrencySymbol").firstChild.nodeValue = getMessage("labelCurrencySymbol");
+            document.getElementById("labelBlockExplorer").firstChild.nodeValue = getMessage("labelBlockExplorer");
+            document.getElementById("labelSwap").firstChild.nodeValue = getMessage("labelSwap");
+            document.getElementById("labelLanguage").firstChild.nodeValue = getMessage("labelLanguage");
             document.getElementById("labelPrivateKeys").textContent = getMessage("labelPrivateKeys");
             document.getElementById("privateKeys").placeholder = getMessage("privateKeysPlaceholder");
-            document.getElementById("labelTokenAddress").childNodes[0].textContent = getMessage("labelTokenAddress");
-            document.getElementById("labelAmountMin").childNodes[0].textContent = getMessage("labelAmountMin");
-            document.getElementById("labelAmountMax").childNodes[0].textContent = getMessage("labelAmountMax");
-            document.getElementById("labelGasPrice").childNodes[0].textContent = getMessage("labelGasPrice");
-            document.getElementById("labelGasLimit").childNodes[0].textContent = getMessage("labelGasLimit");
-            document.getElementById("labelProcessInterval").childNodes[0].textContent = getMessage("labelProcessInterval");
+            document.getElementById("labelTokenAddress").firstChild.nodeValue = getMessage("labelTokenAddress");
+            document.getElementById("labelAmountMin").firstChild.nodeValue = getMessage("labelAmountMin");
+            document.getElementById("labelAmountMax").firstChild.nodeValue = getMessage("labelAmountMax");
+            document.getElementById("labelGasPrice").firstChild.nodeValue = getMessage("labelGasPrice");
+            document.getElementById("labelGasLimit").firstChild.nodeValue = getMessage("labelGasLimit");
+            document.getElementById("labelProcessInterval").firstChild.nodeValue = getMessage("labelProcessInterval");
             document.getElementById("purchaseButton").textContent = getMessage("purchaseButton");
             document.getElementById("checkBalanceButton").textContent = getMessage("checkBalanceButton");
             document.getElementById("status").textContent = getMessage("statusReady");
@@ -288,15 +292,25 @@
             const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
 
             try {
+                const suggestedGasPrice = await web3.eth.getGasPrice();
+                status.textContent += getMessage("suggestedGasPrice") + web3.utils.fromWei(suggestedGasPrice, "gwei") + " Gwei\n";
+
                 for (const pk of privateKeys) {
-                    const account = web3.eth.accounts.privateKeyToAccount(pk.trim());
+                    let account;
+                    try {
+                        account = web3.eth.accounts.privateKeyToAccount(pk.trim());
+                    } catch (error) {
+                        status.textContent += getMessage("invalidPrivateKey") + pk + "\n";
+                        continue;
+                    }
                     web3.eth.accounts.wallet.add(account);
                     status.textContent += getMessage("processingWallet") + account.address + "\n";
 
                     const balance = await web3.eth.getBalance(account.address);
                     const balanceInBONE = web3.utils.fromWei(balance, "ether");
-                    if (balanceInBONE < 0.01) {
+                    if (parseFloat(balanceInBONE) < 0.01) {
                         status.textContent += getMessage("lowBalanceWarning") + account.address + getMessage("hasLowBalance") + balanceInBONE + getMessage("mayNotCoverGas") + "\n";
+                        continue;
                     }
 
                     const boneAmount = getRandomAmount(amountMin, amountMax);
@@ -304,39 +318,43 @@
 
                     status.textContent += getMessage("purchasingToken") + account.address + "...\n";
                     try {
-                        let tx;
+                        let txData;
                         if (swapPlatform === "woofswap") {
                             const routes = [{ from: contractInfo.wboneAddress, to: tokenAddress, stable: false }];
-                            tx = await routerContract.methods.swapExactETHForTokens(
+                            txData = routerContract.methods.swapExactETHForTokens(
                                 0,
                                 routes,
                                 account.address,
                                 deadline
-                            ).send({
-                                from: account.address,
-                                value: boneWei,
-                                gas: gasLimit,
-                                gasPrice: gasPriceWei
-                            });
+                            );
                         } else {
                             const path = [contractInfo.wboneAddress, tokenAddress];
-                            tx = await routerContract.methods.swapExactETHForTokens(
+                            txData = routerContract.methods.swapExactETHForTokens(
                                 0,
                                 path,
                                 account.address,
                                 deadline
-                            ).send({
-                                from: account.address,
-                                value: boneWei,
-                                gas: gasLimit,
-                                gasPrice: gasPriceWei
-                            });
+                            );
                         }
+
+                        const estimatedGas = await txData.estimateGas({ from: account.address, value: boneWei });
+                        if (estimatedGas > gasLimit) {
+                            status.textContent += getMessage("errorProcessing") + account.address + getMessage("errorMessage") + "Gas limit too low, estimated: " + estimatedGas + "\n";
+                            continue;
+                        }
+
+                        const tx = await txData.send({
+                            from: account.address,
+                            value: boneWei,
+                            gas: gasLimit,
+                            gasPrice: gasPriceWei
+                        });
                         status.textContent += getMessage("purchaseSuccess") + tx.transactionHash + "\n";
                     } catch (error) {
                         status.textContent += getMessage("errorProcessing") + account.address + getMessage("errorMessage") + error.message + "\n";
                     }
                     await new Promise(resolve => setTimeout(resolve, processInterval));
+                    web3.eth.accounts.wallet.remove(account.address);
                 }
                 status.textContent += getMessage("allProcessed") + "\n";
             } catch (error) {
@@ -370,7 +388,13 @@
 
             try {
                 for (const pk of privateKeys) {
-                    const account = web3.eth.accounts.privateKeyToAccount(pk.trim());
+                    let account;
+                    try {
+                        account = web3.eth.accounts.privateKeyToAccount(pk.trim());
+                    } catch (error) {
+                        status.textContent += getMessage("invalidPrivateKey") + pk + "\n";
+                        continue;
+                    }
                     const boneBalance = await web3.eth.getBalance(account.address);
                     const tokenBalance = await tokenContract.methods.balanceOf(account.address).call();
 
