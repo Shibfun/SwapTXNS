@@ -12,7 +12,7 @@
         #status { margin-top: 10px; white-space: pre-wrap; }
         .settings { margin: 10px 0; }
         .settings label { display: block; margin-bottom: 5px; }
-        .settings input { width: 200px; margin-bottom: 10px; }
+        .settings input, .settings select { width: 200px; margin-bottom: 10px; }
     </style>
 </head>
 <body onload="updateLanguage()">
@@ -42,6 +42,7 @@
         <label id="labelGasPrice">Gas Price (Gwei): <input type="number" id="gasPrice" value="3.2" step="0.1" min="0"></label>
         <label id="labelGasLimit">Gas Limit: <input type="number" id="gasLimit" value="400000" min="21000"></label>
         <label id="labelProcessInterval">Process Interval (seconds): <input type="number" id="processInterval" value="5" min="1"></label>
+        <label id="labelTradeCycles">Trade Cycles: <input type="number" id="tradeCycles" value="1" min="1"></label>
     </div>
     <button id="purchaseButton" onclick="purchaseTokens()">Batch Purchase Tokens</button>
     <button id="checkBalanceButton" onclick="checkBalances()">Check Balances</button>
@@ -106,6 +107,7 @@
                 labelGasPrice: "Gas Price (Gwei): ",
                 labelGasLimit: "Gas Limit: ",
                 labelProcessInterval: "Process Interval (seconds): ",
+                labelTradeCycles: "Trade Cycles: ",
                 purchaseButton: "Batch Purchase Tokens",
                 checkBalanceButton: "Check Balances",
                 statusStarting: "Status: Starting...",
@@ -122,6 +124,7 @@
                 invalidGasPrice: "Error: Invalid Gas Price.",
                 invalidGasLimit: "Error: Invalid Gas Limit (minimum 21000).",
                 invalidInterval: "Error: Invalid Process Interval (minimum 1 second).",
+                invalidTradeCycles: "Error: Invalid Trade Cycles (minimum 1).",
                 processingWallet: "Processing wallet ",
                 boneBalance: "BONE Balance: ",
                 tokenBalance: "Token Balance: ",
@@ -153,6 +156,7 @@
                 labelGasPrice: "Gas 价格 (Gwei): ",
                 labelGasLimit: "Gas 限制: ",
                 labelProcessInterval: "处理间隔 (秒): ",
+                labelTradeCycles: "交易循环次数: ",
                 purchaseButton: "批量购买代币",
                 checkBalanceButton: "检查余额",
                 statusStarting: "状态: 正在启动...",
@@ -169,6 +173,7 @@
                 invalidGasPrice: "错误: 无效的 Gas 价格。",
                 invalidGasLimit: "错误: 无效的 Gas 限制 (最小 21000)。",
                 invalidInterval: "错误: 无效的处理间隔 (最小 1 秒)。",
+                invalidTradeCycles: "错误: 无效的交易循环次数 (最小 1)。",
                 processingWallet: "正在处理钱包 ",
                 boneBalance: "BONE 余额: ",
                 tokenBalance: "代币余额: ",
@@ -208,6 +213,7 @@
             document.getElementById("labelGasPrice").firstChild.nodeValue = getMessage("labelGasPrice");
             document.getElementById("labelGasLimit").firstChild.nodeValue = getMessage("labelGasLimit");
             document.getElementById("labelProcessInterval").firstChild.nodeValue = getMessage("labelProcessInterval");
+            document.getElementById("labelTradeCycles").firstChild.nodeValue = getMessage("labelTradeCycles");
             document.getElementById("purchaseButton").textContent = getMessage("purchaseButton");
             document.getElementById("checkBalanceButton").textContent = getMessage("checkBalanceButton");
             document.getElementById("status").textContent = getMessage("statusReady");
@@ -244,6 +250,63 @@
             return min + Math.random() * (max - min);
         }
 
+        async function tradeCycle(web3, account, tokenAddress, swapPlatform, contractInfo, gasPriceWei, gasLimit, processInterval, tradeCycles, amountMin, amountMax) {
+            const status = document.getElementById("status");
+            const routerContract = new web3.eth.Contract(contractInfo.routerAbi, contractInfo.routerAddress);
+            const reserveBone = web3.utils.toWei("0.01", "ether");
+
+            for (let cycle = 1; cycle <= tradeCycles; cycle++) {
+                status.textContent += getMessage("processingWallet") + account.address + ` (Cycle ${cycle}/${tradeCycles})\n`;
+
+                const balance = await web3.eth.getBalance(account.address);
+                const balanceInBONE = web3.utils.fromWei(balance, "ether");
+                if (parseFloat(balanceInBONE) < 0.01) {
+                    status.textContent += getMessage("lowBalanceWarning") + account.address + getMessage("hasLowBalance") + balanceInBONE + getMessage("mayNotCoverGas") + "\n";
+                    return;
+                }
+
+                const boneAmount = getRandomAmount(amountMin, amountMax);
+                const boneWei = web3.utils.toWei(boneAmount.toString(), "ether");
+
+                if (web3.utils.toBN(balance).lt(web3.utils.toBN(boneWei).add(web3.utils.toBN(reserveBone)))) {
+                    status.textContent += getMessage("lowBalanceWarning") + account.address + getMessage("hasLowBalance") + balanceInBONE + getMessage("mayNotCoverGas") + "\n";
+                    return;
+                }
+
+                status.textContent += getMessage("purchasingToken") + account.address + "...\n";
+                try {
+                    const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
+                    let txData;
+                    if (swapPlatform === "woofswap") {
+                        const routes = [{ from: contractInfo.wboneAddress, to: tokenAddress, stable: false }];
+                        txData = routerContract.methods.swapExactETHForTokens(0, routes, account.address, deadline);
+                    } else {
+                        const path = [contractInfo.wboneAddress, tokenAddress];
+                        txData = routerContract.methods.swapExactETHForTokens(0, path, account.address, deadline);
+                    }
+
+                    const estimatedGas = await txData.estimateGas({ from: account.address, value: boneWei });
+                    if (estimatedGas > gasLimit) {
+                        status.textContent += getMessage("errorProcessing") + account.address + getMessage("errorMessage") + "Gas limit too low, estimated: " + estimatedGas + "\n";
+                        return;
+                    }
+
+                    const tx = await txData.send({
+                        from: account.address,
+                        value: boneWei,
+                        gas: gasLimit,
+                        gasPrice: gasPriceWei
+                    });
+                    status.textContent += getMessage("purchaseSuccess") + tx.transactionHash + "\n";
+                } catch (error) {
+                    status.textContent += getMessage("errorProcessing") + account.address + getMessage("errorMessage") + error.message + "\n";
+                    return;
+                }
+
+                await new Promise(resolve => setTimeout(resolve, processInterval));
+            }
+        }
+
         async function purchaseTokens() {
             const status = document.getElementById("status");
             status.textContent = getMessage("statusStarting") + "\n";
@@ -262,6 +325,7 @@
             const gasPriceGwei = parseFloat(document.getElementById("gasPrice").value);
             const gasLimit = parseInt(document.getElementById("gasLimit").value);
             const processInterval = parseInt(document.getElementById("processInterval").value) * 1000;
+            const tradeCycles = parseInt(document.getElementById("tradeCycles").value);
 
             if (privateKeys.length < 1) {
                 status.textContent += getMessage("noPrivateKeys") + "\n";
@@ -287,75 +351,31 @@
                 status.textContent += getMessage("invalidInterval") + "\n";
                 return;
             }
+            if (isNaN(tradeCycles) || tradeCycles < 1) {
+                status.textContent += getMessage("invalidTradeCycles") + "\n";
+                return;
+            }
 
             const gasPriceWei = web3.utils.toWei(gasPriceGwei.toString(), "gwei");
-            const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
 
             try {
                 const suggestedGasPrice = await web3.eth.getGasPrice();
                 status.textContent += getMessage("suggestedGasPrice") + web3.utils.fromWei(suggestedGasPrice, "gwei") + " Gwei\n";
 
-                for (const pk of privateKeys) {
+                const tradePromises = privateKeys.map(async (pk) => {
                     let account;
                     try {
                         account = web3.eth.accounts.privateKeyToAccount(pk.trim());
                     } catch (error) {
                         status.textContent += getMessage("invalidPrivateKey") + pk + "\n";
-                        continue;
+                        return;
                     }
                     web3.eth.accounts.wallet.add(account);
-                    status.textContent += getMessage("processingWallet") + account.address + "\n";
-
-                    const balance = await web3.eth.getBalance(account.address);
-                    const balanceInBONE = web3.utils.fromWei(balance, "ether");
-                    if (parseFloat(balanceInBONE) < 0.01) {
-                        status.textContent += getMessage("lowBalanceWarning") + account.address + getMessage("hasLowBalance") + balanceInBONE + getMessage("mayNotCoverGas") + "\n";
-                        continue;
-                    }
-
-                    const boneAmount = getRandomAmount(amountMin, amountMax);
-                    const boneWei = web3.utils.toWei(boneAmount.toString(), "ether");
-
-                    status.textContent += getMessage("purchasingToken") + account.address + "...\n";
-                    try {
-                        let txData;
-                        if (swapPlatform === "woofswap") {
-                            const routes = [{ from: contractInfo.wboneAddress, to: tokenAddress, stable: false }];
-                            txData = routerContract.methods.swapExactETHForTokens(
-                                0,
-                                routes,
-                                account.address,
-                                deadline
-                            );
-                        } else {
-                            const path = [contractInfo.wboneAddress, tokenAddress];
-                            txData = routerContract.methods.swapExactETHForTokens(
-                                0,
-                                path,
-                                account.address,
-                                deadline
-                            );
-                        }
-
-                        const estimatedGas = await txData.estimateGas({ from: account.address, value: boneWei });
-                        if (estimatedGas > gasLimit) {
-                            status.textContent += getMessage("errorProcessing") + account.address + getMessage("errorMessage") + "Gas limit too low, estimated: " + estimatedGas + "\n";
-                            continue;
-                        }
-
-                        const tx = await txData.send({
-                            from: account.address,
-                            value: boneWei,
-                            gas: gasLimit,
-                            gasPrice: gasPriceWei
-                        });
-                        status.textContent += getMessage("purchaseSuccess") + tx.transactionHash + "\n";
-                    } catch (error) {
-                        status.textContent += getMessage("errorProcessing") + account.address + getMessage("errorMessage") + error.message + "\n";
-                    }
-                    await new Promise(resolve => setTimeout(resolve, processInterval));
+                    await tradeCycle(web3, account, tokenAddress, swapPlatform, contractInfo, gasPriceWei, gasLimit, processInterval, tradeCycles, amountMin, amountMax);
                     web3.eth.accounts.wallet.remove(account.address);
-                }
+                });
+
+                await Promise.all(tradePromises);
                 status.textContent += getMessage("allProcessed") + "\n";
             } catch (error) {
                 status.textContent += getMessage("generalError") + error.message + "\n";
